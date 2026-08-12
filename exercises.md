@@ -30,11 +30,11 @@ critical.
 
 | Metric | Acceptable Low Score Scenario | Critical Low Score Scenario | Action Required |
 |---|---|---|---|
-| Faithfulness | | | |
-| Answer Relevance | | | |
-| Context Recall | | | |
-| Context Precision | | | |
-| Completeness | | | |
+| Faithfulness | Khi người dùng hỏi thăm xã giao (chit-chat), đặt câu hỏi mở không có trong tài liệu hoặc cố tình hỏi mẹo mà hệ thống cần từ chối khéo léo. | Khi câu hỏi của sinh viên liên quan đến chính sách cốt lõi (hạn nộp hồ sơ, học phí, điều kiện học bổng) nhưng hệ thống tự bịa ra thông tin không có trong tài liệu. | Điều chỉnh lại prompt của Generator để nhấn mạnh tính Grounding (chỉ trả lời dựa trên context), giảm Temperature, hoặc kiểm tra lại retriever xem có lấy sai context không. |
+| Answer Relevance | Khi câu hỏi của sinh viên quá ngắn, mơ hồ hoặc có nhiều cách hiểu, khiến câu trả lời phải bao quát nhiều khía cạnh hoặc giải thích rộng hơn. | Khi sinh viên hỏi một đường (ví dụ: quy trình xin nghỉ học tạm thời) nhưng hệ thống trả lời một nẻo (giới thiệu về học bổng hoặc calendar). | Tối ưu hóa khâu xử lý câu hỏi đầu vào (Query Reformulation/Expansion), cải thiện Prompt để LLM tập trung trả lời đúng trọng tâm câu hỏi. |
+| Context Recall | Khi câu hỏi đơn giản chỉ cần 1 thông tin nhỏ và hệ thống đã tìm thấy nó, dù expected answer dài hơn và chứa nhiều thông tin phụ không cần thiết. | Khi câu hỏi yêu cầu các điều kiện bắt buộc hoặc các ngoại lệ chính sách (ví dụ: điều kiện nhận học bổng) nhưng Retriever bỏ sót các tài liệu chứa điều kiện đó. | Nâng cao chất lượng Retrieval: tăng Top-K chunks, tối ưu hóa chunk size/overlap, sử dụng Hybrid Search (BM25 + Vector Search), hoặc cải thiện chất lượng embedding. |
+| Context Precision | Khi hệ thống lấy về nhiều thông tin dư thừa (nhiễu) xếp ở cuối danh sách chunks nhưng Generator vẫn đủ thông minh để lọc và trả lời đúng. | Khi tài liệu chứa câu trả lời thực tế bị xếp ở cuối cùng của danh sách chunks và bị Generator bỏ qua hoặc không đọc tới (hiện tượng Lost in the Middle). | Tích hợp Reranker (như Cross-Encoder hoặc Lexical Overlap Reranker) để đẩy các chunks có độ liên quan cao nhất lên đầu tiên trước khi đưa vào LLM. |
+| Completeness | Khi câu hỏi mang tính chất kham khảo sơ bộ và câu trả lời ngắn gọn là đủ để định hướng cho sinh viên, không cần liệt kê toàn bộ chi tiết vụn vặt. | Khi câu hỏi yêu cầu đầy đủ quy trình hoặc các mốc thời gian cụ thể nhưng câu trả lời lại thiếu mất các bước quan trọng hoặc các điều kiện đi kèm. | Cải thiện Prompt của Generator yêu cầu liệt kê đầy đủ chi tiết, điều kiện và các trường hợp ngoại lệ có trong context; sử dụng Chain-of-Thought để liệt kê các ý trước khi trả lời. |
 
 ### Exercise 1.2 — Bias trong LLM-as-a-Judge
 
@@ -47,14 +47,26 @@ Ba bias thường gặp:
 **Câu 1: Thiết kế experiment phát hiện position bias với ít nhất hai conditions.**
 
 > *Câu trả lời:*
+> - **Chuẩn bị:** Chọn ra một tập dữ liệu gồm câu hỏi cùng hai câu trả lời ứng viên khác nhau (Candidate Answer A và Candidate Answer B).
+> - **Condition 1 (Thứ tự A-B):** Đưa vào Prompt của LLM Judge với định dạng: `Response 1: [Answer A]`, `Response 2: [Answer B]`. Yêu cầu Judge đánh giá xem Response nào tốt hơn (hoặc chấm điểm cho từng Response).
+> - **Condition 2 (Thứ tự B-A):** Đổi ngược vị trí trong Prompt: `Response 1: [Answer B]`, `Response 2: [Answer A]`. Giữ nguyên câu hỏi và tiêu chí đánh giá.
+> - **Phân tích kết quả:** Nếu LLM Judge có xu hướng chọn câu trả lời ở vị trí `Response 1` (hoặc `Response 2`) nhiều hơn đáng kể bất kể nội dung là A hay B, thì hệ thống đang bị Position bias.
 
 **Câu 2: Làm thế nào giảm verbosity bias bằng rubric design?**
 
 > *Câu trả lời:*
+> - **Thiết kế Rubric dạng Checklist/Fact-based:** Thay vì yêu cầu đánh giá chung chung bằng thang điểm 1-5, hãy chia nhỏ tiêu chí thành danh sách các điểm thông tin cụ thể (ví dụ: "+1 điểm nếu nêu đúng hạn chót ngày 15/9", "+1 điểm nếu nêu đúng mức phạt 10%").
+> - **Đặt luật không thưởng cho độ dài:** Hướng dẫn rõ ràng trong prompt của Judge: "Không chấm điểm cao hơn cho các câu trả lời dài dòng hoặc chứa thông tin thừa. Một câu trả lời ngắn gọn, trực diện và đủ ý phải được điểm tối đa."
+> - **Phạt thông tin dư thừa:** Đưa vào tiêu chí trừ điểm hoặc cảnh báo nếu câu trả lời chứa thông tin không liên quan hoặc lan man (Ví dụ: "Trừ 1 điểm nếu câu trả lời chứa thông tin ngoài phạm vi câu hỏi").
 
 **Câu 3: Tại sao cần calibrate LLM judge với human labels?**
 
 > *Câu trả lời:*
+> - LLM Judge không hoàn hảo và thường mang các bias cố hữu (như tự ưu tiên câu trả lời của chính mình, thích câu trả lời dài, hoặc không hiểu sâu các sắc thái ngôn ngữ của một domain cụ thể).
+> - Việc hiệu chuẩn (calibration) với nhãn do con người chấm (human labels) trên một tập validation nhỏ giúp:
+>   1. Tính toán độ tương quan (Correlation - như Pearson hoặc Spearman) giữa điểm của LLM và con người.
+>   2. Phát hiện và điều chỉnh các điểm lệch hệ thống (ví dụ: LLM luôn chấm rộng tay hơn con người 1 điểm).
+>   3. Tinh chỉnh thiết kế prompt và rubric cho LLM Judge để tiệm cận nhất với tiêu chí đánh giá thực tế của chuyên gia.
 
 ### Exercise 1.3 — Evaluation trong CI/CD
 
@@ -62,13 +74,16 @@ Ba bias thường gặp:
 
 | Metric | Threshold | Lý do |
 |---|---:|---|
-| Faithfulness | | |
-| Answer Relevance | | |
-| Completeness | | |
+| Faithfulness | 0.90 | Đối với chatbot dịch vụ sinh viên, thông tin chính sách phải tuyệt đối chính xác dựa trên tài liệu gốc để tránh các rủi ro pháp lý/tài chính hoặc khiếu nại từ sinh viên (ví dụ: nhầm lẫn hạn đóng học phí). |
+| Answer Relevance | 0.85 | Đảm bảo chatbot thực sự hiểu và phản hồi trực tiếp câu hỏi của sinh viên, tránh tình trạng trả lời lạc đề gây ức chế cho người dùng. |
+| Completeness | 0.80 | Đảm bảo sinh viên nhận được đầy đủ các điều kiện và ngoại lệ chính sách quan trọng. Mức này có thể thấp hơn Faithfulness một chút vì việc thiếu một chi tiết nhỏ ít nghiêm trọng hơn việc đưa ra thông tin sai lệch (hallucination). |
 
 **Câu 2: Khi nào dùng offline evaluation, online evaluation và human review?**
 
 > *Câu trả lời:*
+> - **Offline evaluation (Pre-deployment):** Chạy tự động trong luồng CI/CD mỗi khi có sự thay đổi về code, prompt của LLM, tham số retriever, hoặc cấu trúc dữ liệu. Sử dụng bộ dữ liệu chuẩn (Golden Dataset) để nhanh chóng phát hiện hồi quy lỗi (regression) trước khi deploy lên môi trường Production.
+> - **Online evaluation (In production):** Chạy liên tục hoặc giám sát trên dữ liệu thực tế từ người dùng. Sử dụng các metric gián tiếp (phản hồi upvote/downvote, tỷ lệ thoát trang, fallback rate) hoặc các LLM Judge nhẹ để theo dõi hiệu năng hệ thống theo thời gian thực và phát hiện sự trôi lệch dữ liệu (data drift).
+> - **Human review (Periodic / Sampled):** Thực hiện định kỳ (hàng tuần/hàng tháng) bởi các chuyên gia hoặc nhân viên hỗ trợ sinh viên trên một mẫu nhỏ dữ liệu thực tế (ví dụ: 1-5% số lượt hội thoại) hoặc các case mà hệ thống gắn cờ (flagged) nghi ngờ lỗi. Kết quả này dùng để cập nhật bộ Golden Dataset và hiệu chỉnh LLM Judge.
 
 ---
 

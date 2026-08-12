@@ -254,16 +254,38 @@ class OpenAIGenerator:
         self.max_output_tokens = max_output_tokens
 
     def generate(self, prompt: str) -> str:
-        response = self.client.responses.create(
-            model=self.model,
-            input=prompt,
-            temperature=0,
-            max_output_tokens=self.max_output_tokens,
-        )
-        answer = response.output_text.strip()
-        if not answer:
-            raise RuntimeError("OpenAI returned an empty answer")
-        return answer
+        import time
+        from openai import RateLimitError
+        max_retries = 8
+        for attempt in range(max_retries):
+            try:
+                if "googleapis.com" in str(self.client.base_url):
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0,
+                    )
+                    answer = response.choices[0].message.content.strip()
+                else:
+                    response = self.client.responses.create(
+                        model=self.model,
+                        input=prompt,
+                        temperature=0,
+                        max_output_tokens=self.max_output_tokens,
+                    )
+                    answer = response.output_text.strip()
+                if not answer:
+                    raise RuntimeError("OpenAI returned an empty answer")
+                return answer
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "Rate limit" in err_str or isinstance(e, RateLimitError):
+                    sleep_time = 15 * (2 ** attempt)
+                    print(f"\n[Rate Limit] Hit 429/Resource Exhausted, sleeping {sleep_time}s (Attempt {attempt+1}/{max_retries})...")
+                    time.sleep(sleep_time)
+                else:
+                    raise e
+        raise RuntimeError("Failed to generate answer after retries due to rate limits")
 
 
 @dataclass(frozen=True)
@@ -406,6 +428,16 @@ def generate_actual_answers(
     )
 
     answers: list[dict[str, Any]] = []
+    output_file = Path("artifacts/actual_answers.json")
+    existing_answers_map = {}
+    if output_file.exists():
+        try:
+            old_data = json.loads(output_file.read_text(encoding="utf-8"))
+            for ans in old_data.get("answers", []):
+                existing_answers_map[ans["id"]] = ans
+        except Exception:
+            pass
+
     for index, item in enumerate(questions, start=1):
         percentage = index / total
         completed_before = index - 1
@@ -414,6 +446,12 @@ def generate_actual_answers(
         question_preview = re.sub(r"\s+", " ", item["question"]).strip()
         if len(question_preview) > 58:
             question_preview = f"{question_preview[:55]}..."
+            
+        if item["id"] in existing_answers_map:
+            notify(f"[{bar_before}] {completed_before:02d}/{total:02d} | {item['id']} SKIPPED (loaded from cache)")
+            answers.append(existing_answers_map[item["id"]])
+            continue
+
         notify(
             f"[{bar_before}] {completed_before:02d}/{total:02d} | "
             f"{item['id']} generating: {question_preview}"
@@ -443,6 +481,27 @@ def generate_actual_answers(
                 "error": None,
             }
         )
+
+        try:
+            temp_artifact = {
+                "schema_version": "1.0",
+                "corpus_id": assistant.corpus_id,
+                "generated_at": datetime.now(UTC).isoformat(),
+                "agent": {
+                    "name": "domain-assistant",
+                    "model": model,
+                    "top_k": top_k,
+                    "prompt_version": "1.0",
+                },
+                "answers": answers,
+            }
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(
+                json.dumps(temp_artifact, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
         filled_after = round(20 * percentage)
         bar_after = "#" * filled_after + "-" * (20 - filled_after)
